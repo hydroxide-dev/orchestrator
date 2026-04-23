@@ -1,0 +1,21 @@
+{
+  "name": "orchestrator",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "bun --watch index.ts",
+    "doctor": "bun index.ts doctor",
+    "setup": "bun index.ts setup",
+    "start": "bun index.ts",
+    "test": "bun test",
+    "typecheck": "bunx tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.8.3"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}
