@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "bun --watch index.ts",
     "doctor": "bun index.ts doctor",
+    "compute": "bun index.ts compute",
     "setup": "bun index.ts setup",
     "start": "bun index.ts",
     "test": "bun test",
@@ -17,5 +18,8 @@
   },
   "peerDependencies": {
     "typescript": "^5"
+  },
+  "dependencies": {
+    "yaml": "^2.8.3"
   }
 }

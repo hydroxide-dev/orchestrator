@@ -1,4 +1,7 @@
 import { loadConfig } from "./config";
+import { readComputeFile } from "./compute";
+import { readImageStore, resolveImage } from "./images";
+import type { ComputeCommandAction } from "./types";
 import { formatSession, runQuickShell, setupQuickShell } from "./quickshell";
 import { runRemoteCommand } from "./ssh";
 import { createInterface } from "node:readline/promises";
@@ -12,12 +15,14 @@ function usage(): string {
     "  bun run index.ts [--verbose|-v] doctor",
     "  bun run index.ts [--verbose|-v] setup",
     "  bun run index.ts [--verbose|-v] quickshell -- <command>",
+    "  bun run index.ts [--verbose|-v] compute <add|update|delete> [file]",
     "",
     "Examples:",
     "  bun run index.ts doctor",
     "  bun run index.ts setup",
     "  bun run index.ts quickshell -- 'whoami'",
     "  bun run index.ts quickshell -- 'uname -a'",
+    "  bun run index.ts compute add compute.yaml",
   ].join("\n");
 }
 
@@ -114,6 +119,36 @@ async function quickshell(argv: string[], verbose: boolean): Promise<void> {
   console.log(JSON.stringify(session, null, 2));
 }
 
+async function compute(argv: string[], verbose: boolean): Promise<void> {
+  const action = argv[0] as ComputeCommandAction | undefined;
+  const file = argv[1] ?? "compute.yaml";
+
+  if (!action || !["add", "update", "delete"].includes(action)) {
+    throw new Error("Usage: compute <add|update|delete> [file]");
+  }
+
+  const instance = await readComputeFile(file);
+  const imageStore = await readImageStore();
+  const image = await resolveImage(instance.runtime.os, imageStore);
+
+  console.log(
+    JSON.stringify(
+      {
+        ok: true,
+        verbose,
+        compute: {
+          action,
+          file,
+          instance,
+          image,
+        },
+      },
+      null,
+      2,
+    ),
+  );
+}
+
 export async function main(argv: string[]): Promise<void> {
   const verbose = argv.includes("--verbose") || argv.includes("-v");
   const filtered = argv.filter((arg) => arg !== "--verbose" && arg !== "-v");
@@ -138,6 +173,11 @@ export async function main(argv: string[]): Promise<void> {
     if (subcommand === "quickshell") {
       const commandArgs = rest[0] === "--" ? rest.slice(1) : rest;
       await quickshell(commandArgs, verbose);
+      return;
+    }
+
+    if (subcommand === "compute") {
+      await compute(rest, verbose);
       return;
     }
 

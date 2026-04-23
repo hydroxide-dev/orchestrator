@@ -13,9 +13,23 @@ The core of Hydroxide. Node-based.
 bun run start -- quickshell -- 'whoami'
 ```
 
-## Current State
+6. Resolve a compute image and parse a compute YAML file with:
 
-For now, this is a suuper basic implementation of QuickShell. Creates the CT (at VMID 9999) and lets you run commands on it. Still needs IAM and service creation.
+```sh
+bun run compute -- add compute.yaml
+```
+
+## What this slice does
+
+- Authenticates to Proxmox VE with an API token.
+- Connects to a PVE node over SSH.
+- Uses the fixed QuickShell VMID `9999`.
+- Creates the container only if it does not already exist.
+- Starts the container if it is stopped.
+- Runs a command inside the container with `pct exec`.
+- Resolves image IDs from `config/images.json` before compute validation.
+- Supports self-signed Proxmox TLS with `PVE_SKIP_TLS_VERIFY=true`.
+- Or, better, set `PVE_CA_FILE` to the Proxmox root CA PEM.
 
 ## Scripts
 
@@ -23,5 +37,6 @@ For now, this is a suuper basic implementation of QuickShell. Creates the CT (at
 - `bun run setup` - onboarding flow for QuickShell
 - `bun run doctor` - verify auth and report QuickShell state
 - `bun run start -- quickshell -- <command>` - create and run a QuickShell command
+- `bun run compute -- add <file>` - parse and validate a compute YAML file
 - `bun run test` - run tests
 - `bun run typecheck` - run TypeScript type checking

@@ -147,13 +147,14 @@ The image system should separate three things:
 The `hydroxide-dev/image` repository should act as the source-of-truth catalog for known-good upstream images and their metadata. The catalog should keep stable IDs such as `ubuntu-24.04` or `debian-12` so users choose Hydroxide IDs, not raw upstream artifact names.
 
 A normal image flow should look like this:
-1. Hydroxide reads the image catalog from `hydroxide-dev/image`.
-2. The user selects a stable image ID.
-3. Hydroxide downloads the upstream artifact or uses a local override URL/path.
-4. Hydroxide verifies the checksum before import.
-5. Hydroxide imports the image into Proxmox.
-6. Hydroxide turns that imported image into a reusable template.
-7. New workloads clone from that template instead of re-importing every time.
+1. Hydroxide reads the upstream manifest from `hydroxide-dev/image` or another declared source.
+2. Hydroxide matches that image against its local registry in `config/images.json`.
+3. The user selects a stable Hydroxide image ID such as `local/endeavouros` or `hydroxide-dev/image/ubuntu-24.04`.
+4. Hydroxide resolves the download URL from the manifest or local override.
+5. Hydroxide verifies the checksum before import.
+6. Hydroxide imports the image into Proxmox at the registered PVE path.
+7. Hydroxide turns that imported image into a reusable template.
+8. New workloads clone from that template instead of re-importing every time.
 
 Hydroxide should assume Cloud-Init is the standard bootstrap path. It should:
 - require Cloud-Init support for first-class images
@@ -284,7 +285,7 @@ resources:
         ipv4: dhcp
         ipv6: slaac
 runtime:
-  os: hydroxide/ubuntu-24-lts
+  os: hydroxide-dev/image/ubuntu-24.04
 ```
 
 ### `service.yaml`

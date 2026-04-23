@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "images": [
+    {
+      "id": "local/endeavouros",
+      "pvePath": "local:iso/endeavouros.qcow2",
+      "downloadUrl": "file:///srv/hydroxide/images/endeavouros.qcow2"
+    },
+    {
+      "id": "hydroxide-dev/image/ubuntu-24.04",
+      "pvePath": "local:iso/ubuntu-24.04.qcow2",
+      "manifestId": "ubuntu-24.04"
+    },
+    {
+      "id": "hydroxide-dev/image/debian-13-trixie",
+      "pvePath": "local:iso/debian-13.qcow2",
+      "manifestId": "debian-13"
+    }
+  ]
+}
