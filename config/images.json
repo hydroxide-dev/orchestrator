@@ -2,19 +2,46 @@
   "version": 1,
   "images": [
     {
-      "id": "local/endeavouros",
-      "localPath": "local:iso/endeavouros.qcow2",
-      "downloadUrl": "file:///srv/hydroxide/images/endeavouros.qcow2"
-    },
-    {
-      "id": "hydroxide-dev/image/ubuntu-24.04",
+      "id": "ubuntu-24.04",
       "localPath": "local:iso/ubuntu-24.04.qcow2",
-      "manifestId": "ubuntu-24.04"
+      "downloadUrl": "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img",
+      "manifestId": "ubuntu-24.04",
+      "sourceKind": "github"
     },
     {
-      "id": "hydroxide-dev/image/debian-13-trixie",
+      "id": "ubuntu-22.04",
+      "localPath": "local:iso/ubuntu-22.04.qcow2",
+      "downloadUrl": "https://cloud-images.ubuntu.com/releases/22.04/release/ubuntu-22.04-server-cloudimg-amd64.img",
+      "manifestId": "ubuntu-22.04",
+      "sourceKind": "github"
+    },
+    {
+      "id": "ubuntu-plucky",
+      "localPath": "local:iso/ubuntu-plucky.qcow2",
+      "downloadUrl": "https://cloud-images.ubuntu.com/plucky/current/plucky-server-cloudimg-amd64.img",
+      "manifestId": "ubuntu-plucky",
+      "sourceKind": "github"
+    },
+    {
+      "id": "debian-13",
       "localPath": "local:iso/debian-13.qcow2",
-      "manifestId": "debian-13"
+      "downloadUrl": "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-nocloud-amd64.qcow2",
+      "manifestId": "debian-13",
+      "sourceKind": "github"
+    },
+    {
+      "id": "debian-12",
+      "localPath": "local:iso/debian-12.qcow2",
+      "downloadUrl": "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-nocloud-amd64.qcow2",
+      "manifestId": "debian-12",
+      "sourceKind": "github"
+    },
+    {
+      "id": "debian-11",
+      "localPath": "local:iso/debian-11.qcow2",
+      "downloadUrl": "https://cloud.debian.org/images/cloud/bullseye/latest/debian-11-nocloud-amd64.qcow2",
+      "manifestId": "debian-11",
+      "sourceKind": "github"
     }
   ]
 }
