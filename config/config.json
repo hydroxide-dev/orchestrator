@@ -1,0 +1,51 @@
+{
+  "pve": {
+    "url": { "$env": "PVE_URL" },
+    "tokenId": { "$env": "PVE_TOKEN_ID" },
+    "tokenSecret": { "$env": "PVE_TOKEN_SECRET" },
+    "node": "homelab",
+    "skipTlsVerify": true,
+    "caFile": null
+  },
+  "ssh": {
+    "host": { "$env": "PVE_SSH_HOST", "defaultFrom": "pve.node" },
+    "user": { "$env": "PVE_SSH_USER", "default": "root" },
+    "port": { "$env": "PVE_SSH_PORT", "default": 22 },
+    "identityFile": { "$env": "PVE_SSH_IDENTITY_FILE" },
+    "batchMode": { "$env": "PVE_SSH_BATCH_MODE", "default": true },
+    "strictHostKeyChecking": { "$env": "PVE_SSH_STRICT_HOST_KEY_CHECKING", "default": false }
+  },
+  "quickshell": {
+    "template": "local:vztmpl/debian-13-standard_13.1-2_amd64.tar.zst",
+    "storage": "local-lvm",
+    "bridge": "vmbr0",
+    "password": { "$env": "QUICKSHELL_PASSWORD" },
+    "vmid": 9999,
+    "hostname": "quickshell",
+    "memory": 1024,
+    "cores": 2,
+    "swap": 512,
+    "unprivileged": true
+  },
+  "storage": {
+    "classes": {
+      "boot": "local-lvm",
+      "storage-fast": "local-lvm",
+      "storage-slow": "local",
+      "backup": "local"
+    }
+  },
+  "images": {
+    "defaultStorage": "local",
+    "pullPolicy": "cache",
+    "registries": [
+      {
+        "id": "hydroxide-dev/image",
+        "kind": "github",
+        "owner": "hydroxide-dev",
+        "repo": "image",
+        "manifest": "manifest.json"
+      }
+    ]
+  }
+}

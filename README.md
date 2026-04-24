@@ -13,7 +13,14 @@ The core of Hydroxide. Node-based.
 bun run start -- quickshell -- 'whoami'
 ```
 
-6. Resolve a compute image and parse a compute YAML file with:
+6. Sync the image cache or import images with:
+
+```sh
+bun run index.ts images sync
+bun run index.ts images import all
+```
+
+7. Resolve a compute image and parse a compute YAML file with:
 
 ```sh
 bun run compute -- add compute.yaml
@@ -27,7 +34,7 @@ bun run compute -- add compute.yaml
 - Creates the container only if it does not already exist.
 - Starts the container if it is stopped.
 - Runs a command inside the container with `pct exec`.
-- Resolves image IDs from `config/images.json` before compute validation.
+- Syncs `config/images.json` from the upstream image manifest and resolves image IDs before compute validation.
 - Supports self-signed Proxmox TLS with `PVE_SKIP_TLS_VERIFY=true`.
 - Or, better, set `PVE_CA_FILE` to the Proxmox root CA PEM.
 
@@ -36,6 +43,8 @@ bun run compute -- add compute.yaml
 - `bun run dev` - watch `index.ts`
 - `bun run setup` - onboarding flow for QuickShell
 - `bun run doctor` - verify auth and report QuickShell state
+- `bun run index.ts images sync` - refresh `config/images.json` from the image catalog
+- `bun run index.ts images import [--force] [all|<image-id> ...]` - import cached images to local PVE storage
 - `bun run start -- quickshell -- <command>` - create and run a QuickShell command
 - `bun run compute -- add <file>` - parse and validate a compute YAML file
 - `bun run test` - run tests

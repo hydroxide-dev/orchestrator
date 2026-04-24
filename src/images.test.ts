@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseImageReference, resolveImage, validateImageStore } from "./images";
+import { importImagePlan, parseImageReference, planImageImports, resolveImage, validateImageStore } from "./images";
 
 describe("parseImageReference", () => {
   test("accepts local IDs", () => {
@@ -26,7 +26,7 @@ describe("resolveImage", () => {
       images: [
         {
           id: "local/endeavouros",
-          pvePath: "local:iso/endeavouros.qcow2",
+          localPath: "local:iso/endeavouros.qcow2",
           downloadUrl: "file:///srv/hydroxide/images/endeavouros.qcow2",
         },
       ],
@@ -34,7 +34,7 @@ describe("resolveImage", () => {
 
     const image = await resolveImage("local/endeavouros", store);
 
-    expect(image.pvePath).toBe("local:iso/endeavouros.qcow2");
+    expect(image.localPath).toBe("local:iso/endeavouros.qcow2");
     expect(image.downloadUrl).toBe("file:///srv/hydroxide/images/endeavouros.qcow2");
     expect(image.source.kind).toBe("local");
   });
@@ -45,7 +45,7 @@ describe("resolveImage", () => {
       images: [
         {
           id: "hydroxide-dev/image/debian-13-trixie",
-          pvePath: "local:iso/debian-13.qcow2",
+          localPath: "local:iso/debian-13.qcow2",
           manifestId: "debian-13",
         },
       ],
@@ -77,9 +77,49 @@ describe("resolveImage", () => {
       },
     );
 
-    expect(image.pvePath).toBe("local:iso/debian-13.qcow2");
+    expect(image.localPath).toBe("local:iso/debian-13.qcow2");
     expect(image.downloadUrl).toBe("https://cloud.example.test/debian-13.qcow2");
     expect(image.source.kind).toBe("github");
     expect(image.source.manifestId).toBe("debian-13");
+  });
+});
+
+describe("image import planning", () => {
+  test("maps resolved images to import plans", async () => {
+    const store = validateImageStore({
+      version: 1,
+      images: [
+        {
+          id: "local/endeavouros",
+          localPath: "local:iso/endeavouros.qcow2",
+          downloadUrl: "file:///srv/hydroxide/images/endeavouros.qcow2",
+        },
+      ],
+    });
+
+    const resolved = await resolveImage("local/endeavouros", store);
+    const [plan] = planImageImports([resolved], true);
+
+    expect(plan?.force).toBe(true);
+    expect(plan?.localPath).toBe("local:iso/endeavouros.qcow2");
+  });
+
+  test("skips existing imports unless forced", async () => {
+    const result = await importImagePlan(
+      {
+        id: "local/endeavouros",
+        localPath: "local:iso/endeavouros.qcow2",
+        downloadUrl: "file:///srv/hydroxide/images/endeavouros.qcow2",
+        source: { kind: "local", url: "file:///srv/hydroxide/images/endeavouros.qcow2" },
+        force: false,
+      },
+      async () => {
+        throw new Error("runner should not be called");
+      },
+      async () => true,
+    );
+
+    expect(result.skipped).toBe(true);
+    expect(result.imported).toBe(false);
   });
 });

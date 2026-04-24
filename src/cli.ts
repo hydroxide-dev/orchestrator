@@ -1,6 +1,12 @@
 import { loadConfig } from "./config";
 import { readComputeFile } from "./compute";
-import { readImageStore, resolveImage } from "./images";
+import {
+  importImagePlan,
+  planImageImports,
+  readImageStore,
+  refreshImageStoreFromManifest,
+  resolveImage,
+} from "./images";
 import type { ComputeCommandAction } from "./types";
 import { formatSession, runQuickShell, setupQuickShell } from "./quickshell";
 import { runRemoteCommand } from "./ssh";
@@ -15,6 +21,7 @@ function usage(): string {
     "  bun run index.ts [--verbose|-v] doctor",
     "  bun run index.ts [--verbose|-v] setup",
     "  bun run index.ts [--verbose|-v] quickshell -- <command>",
+    "  bun run index.ts [--verbose|-v] images import [--force] [all|<image-id> ...]",
     "  bun run index.ts [--verbose|-v] compute <add|update|delete> [file]",
     "",
     "Examples:",
@@ -22,12 +29,14 @@ function usage(): string {
     "  bun run index.ts setup",
     "  bun run index.ts quickshell -- 'whoami'",
     "  bun run index.ts quickshell -- 'uname -a'",
+    "  bun run index.ts images import all",
+    "  bun run index.ts images import --force local/endeavouros",
     "  bun run index.ts compute add compute.yaml",
   ].join("\n");
 }
 
 async function doctor(verbose: boolean): Promise<void> {
-  const config = loadConfig();
+  const config = await loadConfig();
   const { PveApiClient, assertPveAuth } = await import("./pve");
   const client = new PveApiClient(
     config.pveUrl,
@@ -81,7 +90,7 @@ async function confirm(message: string): Promise<boolean> {
 }
 
 async function setup(argv: string[], verbose: boolean): Promise<void> {
-  const config = loadConfig();
+  const config = await loadConfig();
   const force = argv.includes("--yes") || argv.includes("-y");
   if (!force && !input.isTTY) {
     throw new Error("Setup requires an interactive terminal or --yes");
@@ -93,6 +102,7 @@ async function setup(argv: string[], verbose: boolean): Promise<void> {
     return;
   }
 
+  await refreshImageStoreFromManifest();
   const result = await setupQuickShell(config, verbose);
   console.log(
     JSON.stringify(
@@ -112,7 +122,7 @@ async function quickshell(argv: string[], verbose: boolean): Promise<void> {
     throw new Error("Missing QuickShell command");
   }
 
-  const config = loadConfig();
+  const config = await loadConfig();
   const session = await runQuickShell(config, command, verbose);
   console.log(formatSession(session));
   console.log("");
@@ -149,6 +159,73 @@ async function compute(argv: string[], verbose: boolean): Promise<void> {
   );
 }
 
+async function images(argv: string[], verbose: boolean): Promise<void> {
+  const subcommand = argv[0];
+  if (subcommand === "sync") {
+    const store = await refreshImageStoreFromManifest();
+    console.log(JSON.stringify({ ok: true, images: store.images.length }, null, 2));
+    return;
+  }
+
+  if (subcommand !== "import") {
+    throw new Error("Usage: images sync | images import [--force] [all|<image-id> ...]");
+  }
+
+  const force = argv.includes("--force") || argv.includes("-f");
+  const targets = argv.filter((arg) => arg !== "import" && arg !== "--force" && arg !== "-f");
+  const imageStore = await readImageStore();
+  const requestedIds = targets.length === 0 || targets[0] === "all" ? imageStore.images.map((entry) => entry.id) : targets;
+  const plans = planImageImports(
+    await Promise.all(requestedIds.map(async (id) => resolveImage(id, imageStore))),
+    force,
+  );
+
+  const config = await loadConfig();
+  const { runRemoteCommand } = await import("./ssh");
+  const sshTarget = {
+    host: config.sshHost,
+    user: config.sshUser,
+    port: config.sshPort,
+    identityFile: config.sshIdentityFile,
+    batchMode: config.sshBatchMode,
+    strictHostKeyChecking: config.sshStrictHostKeyChecking,
+  };
+
+  const results = [];
+  for (const plan of plans) {
+    const exists = await runRemoteCommand(
+      sshTarget,
+      `test -f ${JSON.stringify(plan.localPath)}`,
+      { verbose, label: `image exists ${plan.id}` },
+    );
+
+    const result = await importImagePlan(
+      plan,
+      async (command) => {
+        const response = await runRemoteCommand(sshTarget, command, { verbose, label: `image import ${plan.id}` });
+        return response;
+      },
+      async () => exists.exitCode === 0,
+    );
+
+    results.push(result);
+  }
+
+  console.log(
+    JSON.stringify(
+      {
+        ok: true,
+        force,
+        imported: results.filter((item) => item.imported).length,
+        skipped: results.filter((item) => item.skipped).length,
+        results,
+      },
+      null,
+      2,
+    ),
+  );
+}
+
 export async function main(argv: string[]): Promise<void> {
   const verbose = argv.includes("--verbose") || argv.includes("-v");
   const filtered = argv.filter((arg) => arg !== "--verbose" && arg !== "-v");
@@ -178,6 +255,11 @@ export async function main(argv: string[]): Promise<void> {
 
     if (subcommand === "compute") {
       await compute(rest, verbose);
+      return;
+    }
+
+    if (subcommand === "images") {
+      await images(rest, verbose);
       return;
     }
 

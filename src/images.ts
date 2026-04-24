@@ -1,4 +1,6 @@
 import type {
+  ImageImportPlan,
+  ImageImportResult,
   ImageReference,
   ImageStore,
   ImageStoreEntry,
@@ -14,6 +16,18 @@ type GithubManifestImage = {
 
 type GithubManifest = {
   images?: Record<string, GithubManifestImage | undefined>;
+};
+
+type ImageCatalogEntry = {
+  name?: string;
+  source?: {
+    url?: unknown;
+  };
+};
+
+type ImageCatalogManifest = {
+  schema_version?: unknown;
+  images?: Record<string, ImageCatalogEntry | undefined>;
 };
 
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
@@ -52,10 +66,11 @@ function validateImageStoreEntry(value: unknown, index: number): ImageStoreEntry
 
   return {
     id: asString(item.id, `images[${index}].id`),
-    pvePath: asString(item.pvePath, `images[${index}].pvePath`),
+    localPath: asString(item.localPath ?? item.pvePath, `images[${index}].localPath`),
     downloadUrl: optionalString(item.downloadUrl),
     manifestUrl: optionalString(item.manifestUrl),
     manifestId: optionalString(item.manifestId),
+    sourceKind: item.sourceKind === "local" || item.sourceKind === "github" ? item.sourceKind : undefined,
   };
 }
 
@@ -93,6 +108,36 @@ export async function readImageStore(filePath = "config/images.json"): Promise<I
   }
 
   return validateImageStore(parsed);
+}
+
+export async function refreshImageStoreFromManifest(
+  manifestPath = "../image/manifest.json",
+  storePath = "config/images.json",
+): Promise<ImageStore> {
+  const existing = (await Bun.file(storePath).exists()) ? await readImageStore(storePath) : undefined;
+  const manifestText = await Bun.file(manifestPath).text();
+  const parsed = JSON.parse(manifestText) as ImageCatalogManifest;
+
+  if (parsed.schema_version !== 1 || !isPlainObject(parsed.images)) {
+    throw new Error(`Invalid image catalog manifest: ${manifestPath}`);
+  }
+
+  const images = Object.entries(parsed.images).map(([id, entry]) => {
+    const prior = existing?.images.find((candidate) => candidate.id === id);
+    const downloadUrl = optionalString(entry?.source?.url) ?? prior?.downloadUrl;
+    return {
+      id,
+      localPath: prior?.localPath ?? `local:iso/${id}.qcow2`,
+      downloadUrl,
+      manifestId: prior?.manifestId ?? id,
+      manifestUrl: prior?.manifestUrl,
+      sourceKind: "github" as const,
+    };
+  });
+
+  const store = validateImageStore({ version: 1, images });
+  await Bun.write(storePath, `${JSON.stringify(store, null, 2)}\n`);
+  return store;
 }
 
 export function parseImageReference(value: string): ImageReference {
@@ -220,8 +265,77 @@ export async function resolveImage(
 
   return {
     id: entry.id,
-    pvePath: entry.pvePath,
+    localPath: entry.localPath,
     downloadUrl: source.url,
     source,
+  };
+}
+
+export function planImageImports(images: ResolvedImage[], force = false): ImageImportPlan[] {
+  return images.map((image) => ({
+    id: image.id,
+    localPath: image.localPath,
+    downloadUrl: image.downloadUrl,
+    source: image.source,
+    force,
+  }));
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\"'\"'`)}'`;
+}
+
+function buildRemoteDownloadCommand(downloadUrl: string, localPath: string, force: boolean): string {
+  const flags = force ? "-fL" : "-fL --continue-at -";
+  return [
+    "sh",
+    "-lc",
+    shellQuote(
+      [
+        `dest="$(pvesm path ${shellQuote(localPath)})"`,
+        `mkdir -p "$(dirname "$dest")"`,
+        `curl ${flags} ${shellQuote(downloadUrl)} -o "$dest"`,
+      ].join(" && "),
+    ),
+  ].join(" ");
+}
+
+export async function importImagePlan(
+  plan: ImageImportPlan,
+  runner: (command: string) => Promise<{ exitCode: number; stdout: string; stderr: string; command: string }>,
+  exists: (localPath: string) => Promise<boolean>,
+): Promise<ImageImportResult> {
+  const alreadyExists = await exists(plan.localPath);
+  if (alreadyExists && !plan.force) {
+    return {
+      id: plan.id,
+      localPath: plan.localPath,
+      downloadUrl: plan.downloadUrl,
+      imported: false,
+      skipped: true,
+    };
+  }
+
+  const command = buildRemoteDownloadCommand(plan.downloadUrl, plan.localPath, plan.force);
+  const result = await runner(command);
+  if (result.exitCode !== 0) {
+    throw new Error(
+      [
+        `Failed to import image ${plan.id}`,
+        result.stderr || result.stdout || "(empty)",
+      ].join("\n"),
+    );
+  }
+
+  return {
+    id: plan.id,
+    localPath: plan.localPath,
+    downloadUrl: plan.downloadUrl,
+    imported: true,
+    skipped: false,
+    command: result.command,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    exitCode: result.exitCode,
   };
 }

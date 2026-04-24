@@ -1,72 +1,244 @@
 import type { AppConfig } from "./types";
 
-function required(name: string, fallback?: string): string {
-  const value = Bun.env[name] ?? fallback;
-  if (!value || value.trim().length === 0) {
-    throw new Error(`Missing required environment variable: ${name}`);
-  }
-  return value.trim();
+type ConfigScalar = string | number | boolean | null;
+
+type EnvReference = {
+  $env: string;
+  default?: ConfigScalar;
+  defaultFrom?: string;
+};
+
+type ConfigValue = ConfigScalar | EnvReference;
+
+type ConfigFile = {
+  pve: {
+    url: ConfigValue;
+    tokenId: ConfigValue;
+    tokenSecret: ConfigValue;
+    node: ConfigValue;
+    skipTlsVerify: ConfigValue;
+    caFile?: ConfigValue;
+  };
+  ssh: {
+    host: ConfigValue;
+    user: ConfigValue;
+    port: ConfigValue;
+    identityFile?: ConfigValue;
+    batchMode: ConfigValue;
+    strictHostKeyChecking: ConfigValue;
+  };
+  quickshell: {
+    template: ConfigValue;
+    storage: ConfigValue;
+    bridge: ConfigValue;
+    password: ConfigValue;
+    vmid: ConfigValue;
+    hostname: ConfigValue;
+    memory: ConfigValue;
+    cores: ConfigValue;
+    swap: ConfigValue;
+    unprivileged: ConfigValue;
+  };
+};
+
+const CONFIG_PATH = "./config/config.json";
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
-function optionalBoolean(name: string, fallback: boolean): boolean {
-  const value = Bun.env[name];
-  if (value == null || value.trim() === "") {
-    return fallback;
-  }
-
-  return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+function isEnvReference(value: ConfigValue): value is EnvReference {
+  return isObject(value) && typeof value.$env === "string";
 }
 
-function optionalNumber(name: string, fallback: number): number {
-  const value = Bun.env[name];
-  if (value == null || value.trim() === "") {
-    return fallback;
+function parseBoolean(value: string, name: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
   }
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  throw new Error(`Configuration value ${name} must be a boolean`);
+}
 
+function parseNumber(value: string, name: string): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) {
-    throw new Error(`Environment variable ${name} must be a number`);
+    throw new Error(`Configuration value ${name} must be a number`);
   }
-
   return parsed;
 }
 
-export function loadConfig(): AppConfig {
-  const pveUrl = required("PVE_URL");
-  const pveTokenId = required("PVE_TOKEN_ID");
-  const pveTokenSecret = required("PVE_TOKEN_SECRET");
-  const pveNode = required("PVE_NODE");
-  const sshHost = required("PVE_SSH_HOST", pveNode);
-  const sshUser = required("PVE_SSH_USER", "root");
-  const quickshellTemplate = required("QUICKSHELL_OSTEMPLATE");
-  const quickshellStorage = required("QUICKSHELL_STORAGE");
-  const quickshellBridge = required("QUICKSHELL_BRIDGE", "vmbr0");
-  const quickshellPassword = required("QUICKSHELL_PASSWORD");
-  const quickshellVmid = optionalNumber("QUICKSHELL_VMID", 9999);
-  const quickshellHostname = required("QUICKSHELL_HOSTNAME", "quickshell");
+function getPathValue(source: unknown, path: string): ConfigScalar | undefined {
+  const parts = path.split(".");
+  let current: unknown = source;
+
+  for (const part of parts) {
+    if (!isObject(current) || !(part in current)) {
+      return undefined;
+    }
+    current = current[part];
+  }
+
+  if (current == null || typeof current === "string" || typeof current === "number" || typeof current === "boolean") {
+    return current;
+  }
+
+  return undefined;
+}
+
+function coerceResolvedValue(
+  value: ConfigScalar | undefined,
+  name: string,
+  kind: "string" | "number" | "boolean",
+  required = true,
+): string | number | boolean | undefined {
+  if (value == null) {
+    if (required) {
+      throw new Error(`Missing required configuration value: ${name}`);
+    }
+    return undefined;
+  }
+
+  if (kind === "string") {
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (trimmed.length === 0) {
+        if (required) {
+          throw new Error(`Missing required configuration value: ${name}`);
+        }
+        return undefined;
+      }
+      return trimmed;
+    }
+    return String(value);
+  }
+
+  if (kind === "number") {
+    if (typeof value === "number") {
+      if (!Number.isFinite(value)) {
+        throw new Error(`Configuration value ${name} must be a number`);
+      }
+      return value;
+    }
+    if (typeof value === "string") {
+      return parseNumber(value.trim(), name);
+    }
+    throw new Error(`Configuration value ${name} must be a number`);
+  }
+
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    return parseBoolean(value, name);
+  }
+  throw new Error(`Configuration value ${name} must be a boolean`);
+}
+
+function resolveValue(raw: ConfigValue | undefined, root: ConfigFile, name: string): ConfigScalar | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+
+  if (!isEnvReference(raw)) {
+    return raw;
+  }
+
+  const envValue = Bun.env[raw.$env];
+  if (envValue != null && envValue.trim() !== "") {
+    return envValue.trim();
+  }
+
+  if (raw.defaultFrom) {
+    const fallback = getPathValue(root, raw.defaultFrom);
+    const resolvedFallback = resolveValue(fallback as ConfigValue | undefined, root, `${name} -> ${raw.defaultFrom}`);
+    if (resolvedFallback !== undefined) {
+      return resolvedFallback;
+    }
+  }
+
+  return raw.default;
+}
+
+async function readConfigFile(): Promise<ConfigFile> {
+  const file = Bun.file(CONFIG_PATH);
+  if (!(await file.exists())) {
+    throw new Error(`Missing config file: ${CONFIG_PATH}`);
+  }
+
+  return (await file.json()) as ConfigFile;
+}
+
+export async function loadConfig(): Promise<AppConfig> {
+  const root = await readConfigFile();
 
   return {
-    pveUrl: pveUrl.replace(/\/+$/, ""),
-    pveTokenId,
-    pveTokenSecret,
-    pveNode,
-    pveSkipTlsVerify: optionalBoolean("PVE_SKIP_TLS_VERIFY", false),
-    pveCaFile: Bun.env.PVE_CA_FILE?.trim() || undefined,
-    sshHost,
-    sshUser,
-    sshPort: optionalNumber("PVE_SSH_PORT", 22),
-    sshIdentityFile: Bun.env.PVE_SSH_IDENTITY_FILE?.trim() || undefined,
-    sshBatchMode: optionalBoolean("PVE_SSH_BATCH_MODE", true),
-    sshStrictHostKeyChecking: optionalBoolean("PVE_SSH_STRICT_HOST_KEY_CHECKING", false),
-    quickshellTemplate,
-    quickshellStorage,
-    quickshellBridge,
-    quickshellPassword,
-    quickshellVmid,
-    quickshellHostname,
-    quickshellMemory: optionalNumber("QUICKSHELL_MEMORY", 256),
-    quickshellCores: optionalNumber("QUICKSHELL_CORES", 1),
-    quickshellSwap: optionalNumber("QUICKSHELL_SWAP", 256),
-    quickshellUnprivileged: optionalBoolean("QUICKSHELL_UNPRIVILEGED", true),
+    pveUrl: String(coerceResolvedValue(resolveValue(root.pve.url, root, "pve.url"), "pve.url", "string")).replace(/\/+$/, ""),
+    pveTokenId: String(coerceResolvedValue(resolveValue(root.pve.tokenId, root, "pve.tokenId"), "pve.tokenId", "string")),
+    pveTokenSecret: String(
+      coerceResolvedValue(resolveValue(root.pve.tokenSecret, root, "pve.tokenSecret"), "pve.tokenSecret", "string"),
+    ),
+    pveNode: String(coerceResolvedValue(resolveValue(root.pve.node, root, "pve.node"), "pve.node", "string")),
+    pveSkipTlsVerify: Boolean(
+      coerceResolvedValue(resolveValue(root.pve.skipTlsVerify, root, "pve.skipTlsVerify"), "pve.skipTlsVerify", "boolean"),
+    ),
+    pveCaFile: coerceResolvedValue(resolveValue(root.pve.caFile, root, "pve.caFile"), "pve.caFile", "string", false) as
+      | string
+      | undefined,
+    sshHost: String(coerceResolvedValue(resolveValue(root.ssh.host, root, "ssh.host"), "ssh.host", "string")),
+    sshUser: String(coerceResolvedValue(resolveValue(root.ssh.user, root, "ssh.user"), "ssh.user", "string")),
+    sshPort: Number(coerceResolvedValue(resolveValue(root.ssh.port, root, "ssh.port"), "ssh.port", "number")),
+    sshIdentityFile: coerceResolvedValue(
+      resolveValue(root.ssh.identityFile, root, "ssh.identityFile"),
+      "ssh.identityFile",
+      "string",
+      false,
+    ) as string | undefined,
+    sshBatchMode: Boolean(
+      coerceResolvedValue(resolveValue(root.ssh.batchMode, root, "ssh.batchMode"), "ssh.batchMode", "boolean"),
+    ),
+    sshStrictHostKeyChecking: Boolean(
+      coerceResolvedValue(
+        resolveValue(root.ssh.strictHostKeyChecking, root, "ssh.strictHostKeyChecking"),
+        "ssh.strictHostKeyChecking",
+        "boolean",
+      ),
+    ),
+    quickshellTemplate: String(
+      coerceResolvedValue(resolveValue(root.quickshell.template, root, "quickshell.template"), "quickshell.template", "string"),
+    ),
+    quickshellStorage: String(
+      coerceResolvedValue(resolveValue(root.quickshell.storage, root, "quickshell.storage"), "quickshell.storage", "string"),
+    ),
+    quickshellBridge: String(
+      coerceResolvedValue(resolveValue(root.quickshell.bridge, root, "quickshell.bridge"), "quickshell.bridge", "string"),
+    ),
+    quickshellPassword: String(
+      coerceResolvedValue(resolveValue(root.quickshell.password, root, "quickshell.password"), "quickshell.password", "string"),
+    ),
+    quickshellVmid: Number(
+      coerceResolvedValue(resolveValue(root.quickshell.vmid, root, "quickshell.vmid"), "quickshell.vmid", "number"),
+    ),
+    quickshellHostname: String(
+      coerceResolvedValue(resolveValue(root.quickshell.hostname, root, "quickshell.hostname"), "quickshell.hostname", "string"),
+    ),
+    quickshellMemory: Number(
+      coerceResolvedValue(resolveValue(root.quickshell.memory, root, "quickshell.memory"), "quickshell.memory", "number"),
+    ),
+    quickshellCores: Number(
+      coerceResolvedValue(resolveValue(root.quickshell.cores, root, "quickshell.cores"), "quickshell.cores", "number"),
+    ),
+    quickshellSwap: Number(
+      coerceResolvedValue(resolveValue(root.quickshell.swap, root, "quickshell.swap"), "quickshell.swap", "number"),
+    ),
+    quickshellUnprivileged: Boolean(
+      coerceResolvedValue(
+        resolveValue(root.quickshell.unprivileged, root, "quickshell.unprivileged"),
+        "quickshell.unprivileged",
+        "boolean",
+      ),
+    ),
   };
 }

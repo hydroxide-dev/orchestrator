@@ -43,10 +43,11 @@ export type ImageStoreVersion = 1;
 
 export type ImageStoreEntry = {
   id: string;
-  pvePath: string;
+  localPath: string;
   downloadUrl?: string;
   manifestUrl?: string;
   manifestId?: string;
+  sourceKind?: "local" | "github";
 };
 
 export type ImageStore = {
@@ -73,9 +74,29 @@ export type ResolvedImageSource = {
 
 export type ResolvedImage = {
   id: string;
-  pvePath: string;
+  localPath: string;
   downloadUrl: string;
   source: ResolvedImageSource;
+};
+
+export type ImageImportPlan = {
+  id: string;
+  localPath: string;
+  downloadUrl: string;
+  source: ResolvedImageSource;
+  force: boolean;
+};
+
+export type ImageImportResult = {
+  id: string;
+  localPath: string;
+  downloadUrl: string;
+  imported: boolean;
+  skipped: boolean;
+  command?: string;
+  stdout?: string;
+  stderr?: string;
+  exitCode?: number;
 };
 
 export type ComputeVersion = 1;
