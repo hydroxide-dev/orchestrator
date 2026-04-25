@@ -27,6 +27,11 @@
     "swap": 512,
     "unprivileged": true
   },
+  "state": {
+    "instanceConfigDir": "./var/instances",
+    "instancesDb": "./var/instances.sqlite3",
+    "eventsDb": "./var/events.sqlite3"
+  },
   "storage": {
     "classes": {
       "boot": "local-lvm",

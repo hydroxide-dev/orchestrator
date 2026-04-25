@@ -1,5 +1,8 @@
-import { loadConfig } from "./config";
+import { loadConfig, loadStateConfig } from "./config";
+import { archiveComputeSource, buildInstanceRecord, markInstanceDeleteRequested } from "./compute-store";
 import { readComputeFile } from "./compute";
+import { openSqlite } from "./db";
+import { createOperation, finishOperation, initEventsDb, nowIso, startOperation } from "./events";
 import {
   importImagePlan,
   planImageImports,
@@ -7,9 +10,11 @@ import {
   refreshImageStoreFromManifest,
   resolveImage,
 } from "./images";
-import type { ComputeCommandAction } from "./types";
+import { initInstancesDb, insertInstance, readInstance, updateInstance } from "./instances";
+import type { ComputeCommandAction, OperationEventName } from "./types";
 import { formatSession, runQuickShell, setupQuickShell } from "./quickshell";
 import { runRemoteCommand } from "./ssh";
+import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 
@@ -22,7 +27,9 @@ function usage(): string {
     "  bun run index.ts [--verbose|-v] setup",
     "  bun run index.ts [--verbose|-v] quickshell -- <command>",
     "  bun run index.ts [--verbose|-v] images import [--force] [all|<image-id> ...]",
-    "  bun run index.ts [--verbose|-v] compute <add|update|delete> [file]",
+    "  bun run index.ts [--verbose|-v] compute create [file]",
+    "  bun run index.ts [--verbose|-v] compute update --uuid <instance-uuid> [file]",
+    "  bun run index.ts [--verbose|-v] compute delete --uuid <instance-uuid>",
     "",
     "Examples:",
     "  bun run index.ts doctor",
@@ -31,8 +38,24 @@ function usage(): string {
     "  bun run index.ts quickshell -- 'uname -a'",
     "  bun run index.ts images import all",
     "  bun run index.ts images import --force local/endeavouros",
-    "  bun run index.ts compute add compute.yaml",
+    "  bun run index.ts compute create compute.yaml",
   ].join("\n");
+}
+
+function actorName(): string {
+  return Bun.env.HYDROXIDE_ACTOR?.trim() || Bun.env.USER?.trim() || "local";
+}
+
+function parseUuidArg(args: string[]): { uuid: string; rest: string[] } {
+  const index = args.indexOf("--uuid");
+  if (index === -1 || !args[index + 1]) {
+    throw new Error("Missing required --uuid <instance-uuid>");
+  }
+
+  return {
+    uuid: args[index + 1] as string,
+    rest: args.filter((_, itemIndex) => itemIndex !== index && itemIndex !== index + 1),
+  };
 }
 
 async function doctor(verbose: boolean): Promise<void> {
@@ -102,7 +125,27 @@ async function setup(argv: string[], verbose: boolean): Promise<void> {
     return;
   }
 
-  await refreshImageStoreFromManifest();
+  const eventsDb = await openSqlite(config.stateEventsDb);
+  initEventsDb(eventsDb);
+  const event = createOperation(eventsDb, {
+    eventName: "images.sync",
+    humanName: "Images sync",
+    actor: actorName(),
+    targetNode: config.pveNode,
+    payload: { action: "setup" },
+  });
+  try {
+    startOperation(eventsDb, event.id);
+    await refreshImageStoreFromManifest();
+    finishOperation(eventsDb, event.id, "succeeded");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    finishOperation(eventsDb, event.id, "failed", message);
+    throw error;
+  } finally {
+    eventsDb.close();
+  }
+
   const result = await setupQuickShell(config, verbose);
   console.log(
     JSON.stringify(
@@ -131,99 +174,247 @@ async function quickshell(argv: string[], verbose: boolean): Promise<void> {
 
 async function compute(argv: string[], verbose: boolean): Promise<void> {
   const action = argv[0] as ComputeCommandAction | undefined;
-  const file = argv[1] ?? "compute.yaml";
 
-  if (!action || !["add", "update", "delete"].includes(action)) {
-    throw new Error("Usage: compute <add|update|delete> [file]");
+  if (!action || !["create", "update", "delete"].includes(action)) {
+    throw new Error("Usage: compute create [file] | compute update --uuid <id> [file] | compute delete --uuid <id>");
   }
 
-  const instance = await readComputeFile(file);
-  const imageStore = await readImageStore();
-  const image = await resolveImage(instance.runtime.os, imageStore);
+  const config = await loadConfig();
+  const eventsDb = await openSqlite(config.stateEventsDb);
+  const instancesDb = await openSqlite(config.stateInstancesDb);
+  initEventsDb(eventsDb);
+  initInstancesDb(instancesDb);
 
-  console.log(
-    JSON.stringify(
-      {
-        ok: true,
-        verbose,
-        compute: {
-          action,
-          file,
-          instance,
-          image,
+  const actionArgs = argv.slice(1);
+  const parsed = action === "create" ? { uuid: randomUUID(), rest: actionArgs } : parseUuidArg(actionArgs);
+  const file = action === "delete" ? undefined : parsed.rest[0] ?? "compute.yaml";
+  const eventName: OperationEventName = `compute.${action}`;
+  const event = createOperation(eventsDb, {
+    eventName,
+    humanName: `Compute ${action}`,
+    actor: actorName(),
+    targetInstance: parsed.uuid,
+    targetNode: config.pveNode,
+    payload: {
+      action,
+      file,
+      uuid: parsed.uuid,
+    },
+  });
+
+  try {
+    startOperation(eventsDb, event.id);
+
+    if (action === "delete") {
+      const existing = readInstance(instancesDb, parsed.uuid);
+      if (!existing) {
+        throw new Error(`Unknown instance UUID: ${parsed.uuid}`);
+      }
+
+      const record = markInstanceDeleteRequested(existing, nowIso());
+      updateInstance(instancesDb, record);
+      finishOperation(eventsDb, event.id, "succeeded");
+      console.log(
+        JSON.stringify(
+          {
+            ok: true,
+            verbose,
+            compute: {
+              action,
+              instanceUuid: parsed.uuid,
+              instanceStatus: record.status,
+              instancesDb: config.stateInstancesDb,
+              eventsDb: config.stateEventsDb,
+              eventsWritten: [event.id],
+            },
+          },
+          null,
+          2,
+        ),
+      );
+      return;
+    }
+
+    if (!file) {
+      throw new Error(`Missing compute file for ${action}`);
+    }
+
+    const instance = await readComputeFile(file);
+    const prior = action === "update" ? readInstance(instancesDb, parsed.uuid) : undefined;
+    if (action === "update" && !prior) {
+      throw new Error(`Unknown instance UUID: ${parsed.uuid}`);
+    }
+
+    const imageStore = await readImageStore();
+    const image = await resolveImage(instance.runtime.os, imageStore);
+    const archive = await archiveComputeSource(file, config.stateInstanceConfigDir, parsed.uuid);
+
+    const record = buildInstanceRecord({
+      uuid: parsed.uuid,
+      status: action === "create" ? "desired" : "updated",
+      compute: instance,
+      image,
+      archive,
+      now: nowIso(),
+      prior,
+    });
+
+    if (action === "create") {
+      insertInstance(instancesDb, record);
+    } else {
+      updateInstance(instancesDb, record);
+    }
+
+    finishOperation(eventsDb, event.id, "succeeded");
+    console.log(
+      JSON.stringify(
+        {
+          ok: true,
+          verbose,
+          compute: {
+            action,
+            file,
+            instanceUuid: parsed.uuid,
+            instanceStatus: record.status,
+            computePath: record.computePath,
+            instancesDb: config.stateInstancesDb,
+            eventsDb: config.stateEventsDb,
+            eventsWritten: [event.id],
+            instance,
+            image,
+          },
         },
-      },
-      null,
-      2,
-    ),
-  );
+        null,
+        2,
+      ),
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    finishOperation(eventsDb, event.id, "failed", message);
+    throw error;
+  } finally {
+    instancesDb.close();
+    eventsDb.close();
+  }
 }
 
 async function images(argv: string[], verbose: boolean): Promise<void> {
   const subcommand = argv[0];
+
   if (subcommand === "sync") {
-    const store = await refreshImageStoreFromManifest();
-    console.log(JSON.stringify({ ok: true, images: store.images.length }, null, 2));
-    return;
+    const config = await loadStateConfig();
+    const eventsDb = await openSqlite(config.stateEventsDb);
+    initEventsDb(eventsDb);
+    const event = createOperation(eventsDb, {
+      eventName: "images.sync",
+      humanName: "Images sync",
+      actor: actorName(),
+      targetNode: config.pveNode,
+      payload: { action: "sync" },
+    });
+    try {
+      startOperation(eventsDb, event.id);
+      const store = await refreshImageStoreFromManifest();
+      finishOperation(eventsDb, event.id, "succeeded");
+      console.log(JSON.stringify({ ok: true, images: store.images.length, eventsWritten: [event.id] }, null, 2));
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      finishOperation(eventsDb, event.id, "failed", message);
+      throw error;
+    } finally {
+      eventsDb.close();
+    }
   }
 
   if (subcommand !== "import") {
     throw new Error("Usage: images sync | images import [--force] [all|<image-id> ...]");
   }
 
-  const force = argv.includes("--force") || argv.includes("-f");
-  const targets = argv.filter((arg) => arg !== "import" && arg !== "--force" && arg !== "-f");
-  const imageStore = await readImageStore();
-  const requestedIds = targets.length === 0 || targets[0] === "all" ? imageStore.images.map((entry) => entry.id) : targets;
-  const plans = planImageImports(
-    await Promise.all(requestedIds.map(async (id) => resolveImage(id, imageStore))),
-    force,
-  );
-
   const config = await loadConfig();
-  const { runRemoteCommand } = await import("./ssh");
-  const sshTarget = {
-    host: config.sshHost,
-    user: config.sshUser,
-    port: config.sshPort,
-    identityFile: config.sshIdentityFile,
-    batchMode: config.sshBatchMode,
-    strictHostKeyChecking: config.sshStrictHostKeyChecking,
-  };
+  const eventsDb = await openSqlite(config.stateEventsDb);
+  initEventsDb(eventsDb);
 
-  const results = [];
-  for (const plan of plans) {
-    const exists = await runRemoteCommand(
-      sshTarget,
-      `test -f ${JSON.stringify(plan.localPath)}`,
-      { verbose, label: `image exists ${plan.id}` },
+  try {
+    const force = argv.includes("--force") || argv.includes("-f");
+    const targets = argv.filter((arg) => arg !== "import" && arg !== "--force" && arg !== "-f");
+    const imageStore = await readImageStore();
+    const requestedIds = targets.length === 0 || targets[0] === "all" ? imageStore.images.map((entry) => entry.id) : targets;
+    const plans = planImageImports(
+      await Promise.all(requestedIds.map(async (id) => resolveImage(id, imageStore))),
+      force,
     );
 
-    const result = await importImagePlan(
-      plan,
-      async (command) => {
-        const response = await runRemoteCommand(sshTarget, command, { verbose, label: `image import ${plan.id}` });
-        return response;
-      },
-      async () => exists.exitCode === 0,
-    );
+    const { runRemoteCommand } = await import("./ssh");
+    const sshTarget = {
+      host: config.sshHost,
+      user: config.sshUser,
+      port: config.sshPort,
+      identityFile: config.sshIdentityFile,
+      batchMode: config.sshBatchMode,
+      strictHostKeyChecking: config.sshStrictHostKeyChecking,
+    };
 
-    results.push(result);
+    const results = [];
+    const eventsWritten = [];
+    for (const plan of plans) {
+      const event = createOperation(eventsDb, {
+        eventName: "images.pull",
+        humanName: "Images pull",
+        actor: actorName(),
+        targetNode: config.pveNode,
+        payload: {
+          imageId: plan.id,
+          localPath: plan.localPath,
+          downloadUrl: plan.downloadUrl,
+          force: plan.force,
+        },
+      });
+      eventsWritten.push(event.id);
+
+      try {
+        startOperation(eventsDb, event.id);
+        const exists = await runRemoteCommand(
+          sshTarget,
+          `test -f ${JSON.stringify(plan.localPath)}`,
+          { verbose, label: `image exists ${plan.id}` },
+        );
+
+        const result = await importImagePlan(
+          plan,
+          async (command) => {
+            const response = await runRemoteCommand(sshTarget, command, { verbose, label: `image import ${plan.id}` });
+            return response;
+          },
+          async () => exists.exitCode === 0,
+        );
+
+        finishOperation(eventsDb, event.id, "succeeded");
+        results.push(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        finishOperation(eventsDb, event.id, "failed", message);
+        throw error;
+      }
+    }
+
+    console.log(
+      JSON.stringify(
+        {
+          ok: true,
+          force,
+          imported: results.filter((item) => item.imported).length,
+          skipped: results.filter((item) => item.skipped).length,
+          eventsWritten,
+          results,
+        },
+        null,
+        2,
+      ),
+    );
+  } finally {
+    eventsDb.close();
   }
-
-  console.log(
-    JSON.stringify(
-      {
-        ok: true,
-        force,
-        imported: results.filter((item) => item.imported).length,
-        skipped: results.filter((item) => item.skipped).length,
-        results,
-      },
-      null,
-      2,
-    ),
-  );
 }
 
 export async function main(argv: string[]): Promise<void> {

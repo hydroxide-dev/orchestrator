@@ -156,12 +156,12 @@ export function parseImageReference(value: string): ImageReference {
 
   const parts = trimmed.split("/").filter((part) => part.length > 0);
   if (parts.length < 3) {
-    throw new Error(
-      [
-        "Invalid image ID:",
-        "expected either local/<id> or <org>/<repo>/<id>",
-      ].join(" "),
-    );
+    return {
+      kind: "github",
+      id: trimmed,
+      repository: "hydroxide-dev/image",
+      imageId: trimmed,
+    };
   }
 
   const [org, repo, ...rest] = parts;

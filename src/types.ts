@@ -28,6 +28,9 @@ export type AppConfig = {
   quickshellCores: number;
   quickshellSwap: number;
   quickshellUnprivileged: boolean;
+  stateInstanceConfigDir: string;
+  stateInstancesDb: string;
+  stateEventsDb: string;
 };
 
 export type QuickShellSession = {
@@ -133,11 +136,61 @@ export type ComputeInstance = {
   };
 };
 
-export type ComputeCommandAction = "add" | "update" | "delete";
+export type ComputeCommandAction = "create" | "update" | "delete";
 
 export type ComputeCommandResult = {
   action: ComputeCommandAction;
   file: string;
   instance: ComputeInstance;
   image: ResolvedImage;
+};
+
+export type InstanceStatus = "desired" | "updated" | "delete_requested";
+
+export type InstanceRecord = {
+  uuid: string;
+  name?: string;
+  vmid?: number;
+  node?: string;
+  status: InstanceStatus;
+  computePath: string;
+  computeSha256: string;
+  imageId: string;
+  imageLocalPath: string;
+  cpuCores: number;
+  ramMb: number;
+  desiredJson: string;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt?: string;
+};
+
+export type OperationEventName =
+  | "compute.create"
+  | "compute.update"
+  | "compute.delete"
+  | "images.sync"
+  | "images.pull";
+
+export type OperationStatus = "pending" | "running" | "succeeded" | "failed";
+
+export type OperationSource = "user" | "reconciler";
+
+export type OperationEventRecord = {
+  id: string;
+  eventName: OperationEventName;
+  humanName: string;
+  actor: string;
+  targetService?: string;
+  targetInstance?: string;
+  targetNode?: string;
+  status: OperationStatus;
+  createdAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  retryAt?: string;
+  retryCount: number;
+  failureReason?: string;
+  payloadJson: string;
+  source: OperationSource;
 };

@@ -17,6 +17,14 @@ describe("parseImageReference", () => {
     expect(reference.repository).toBe("hydroxide-dev/image");
     expect(reference.imageId).toBe("debian-13-trixie");
   });
+
+  test("accepts catalog IDs from the default image repository", () => {
+    const reference = parseImageReference("ubuntu-24.04");
+
+    expect(reference.kind).toBe("github");
+    expect(reference.repository).toBe("hydroxide-dev/image");
+    expect(reference.imageId).toBe("ubuntu-24.04");
+  });
 });
 
 describe("resolveImage", () => {

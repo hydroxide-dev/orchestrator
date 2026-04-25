@@ -23,7 +23,7 @@ bun run index.ts images import all
 7. Resolve a compute image and parse a compute YAML file with:
 
 ```sh
-bun run compute -- add compute.yaml
+bun run compute -- create compute.yaml
 ```
 
 ## What this slice does
@@ -35,6 +35,7 @@ bun run compute -- add compute.yaml
 - Starts the container if it is stopped.
 - Runs a command inside the container with `pct exec`.
 - Syncs `config/images.json` from the upstream image manifest and resolves image IDs before compute validation.
+- Persists compute intent to SQLite, archives source compute files by instance UUID, and records operation events.
 - Supports self-signed Proxmox TLS with `PVE_SKIP_TLS_VERIFY=true`.
 - Or, better, set `PVE_CA_FILE` to the Proxmox root CA PEM.
 
@@ -46,6 +47,8 @@ bun run compute -- add compute.yaml
 - `bun run index.ts images sync` - refresh `config/images.json` from the image catalog
 - `bun run index.ts images import [--force] [all|<image-id> ...]` - import cached images to local PVE storage
 - `bun run start -- quickshell -- <command>` - create and run a QuickShell command
-- `bun run compute -- add <file>` - parse and validate a compute YAML file
+- `bun run compute -- create <file>` - persist a validated compute YAML file as desired instance state
+- `bun run compute -- update --uuid <instance-uuid> <file>` - update desired instance state
+- `bun run compute -- delete --uuid <instance-uuid>` - mark an instance for deletion
 - `bun run test` - run tests
 - `bun run typecheck` - run TypeScript type checking

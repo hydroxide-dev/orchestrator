@@ -39,9 +39,24 @@ type ConfigFile = {
     swap: ConfigValue;
     unprivileged: ConfigValue;
   };
+  state?: {
+    instanceConfigDir?: ConfigValue;
+    instancesDb?: ConfigValue;
+    eventsDb?: ConfigValue;
+  };
 };
 
 const CONFIG_PATH = "./config/config.json";
+const DEFAULT_INSTANCE_CONFIG_DIR = "./var/instances";
+const DEFAULT_INSTANCES_DB = "./var/instances.sqlite3";
+const DEFAULT_EVENTS_DB = "./var/events.sqlite3";
+
+export type StateConfig = {
+  pveNode?: string;
+  stateInstanceConfigDir: string;
+  stateInstancesDb: string;
+  stateEventsDb: string;
+};
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -162,17 +177,18 @@ function resolveValue(raw: ConfigValue | undefined, root: ConfigFile, name: stri
   return raw.default;
 }
 
-async function readConfigFile(): Promise<ConfigFile> {
-  const file = Bun.file(CONFIG_PATH);
+async function readConfigFile(configPath: string): Promise<ConfigFile> {
+  const file = Bun.file(configPath);
   if (!(await file.exists())) {
-    throw new Error(`Missing config file: ${CONFIG_PATH}`);
+    throw new Error(`Missing config file: ${configPath}`);
   }
 
   return (await file.json()) as ConfigFile;
 }
 
-export async function loadConfig(): Promise<AppConfig> {
-  const root = await readConfigFile();
+export async function loadConfig(configPath = CONFIG_PATH): Promise<AppConfig> {
+  const root = await readConfigFile(configPath);
+  const state = resolveStateConfig(root);
 
   return {
     pveUrl: String(coerceResolvedValue(resolveValue(root.pve.url, root, "pve.url"), "pve.url", "string")).replace(/\/+$/, ""),
@@ -240,5 +256,41 @@ export async function loadConfig(): Promise<AppConfig> {
         "boolean",
       ),
     ),
+    stateInstanceConfigDir: state.stateInstanceConfigDir,
+    stateInstancesDb: state.stateInstancesDb,
+    stateEventsDb: state.stateEventsDb,
   };
+}
+
+function resolveStateConfig(root: ConfigFile): StateConfig {
+  return {
+    pveNode: coerceResolvedValue(resolveValue(root.pve.node, root, "pve.node"), "pve.node", "string", false) as
+      | string
+      | undefined,
+    stateInstanceConfigDir: String(
+      coerceResolvedValue(
+        resolveValue(root.state?.instanceConfigDir ?? DEFAULT_INSTANCE_CONFIG_DIR, root, "state.instanceConfigDir"),
+        "state.instanceConfigDir",
+        "string",
+      ),
+    ),
+    stateInstancesDb: String(
+      coerceResolvedValue(
+        resolveValue(root.state?.instancesDb ?? DEFAULT_INSTANCES_DB, root, "state.instancesDb"),
+        "state.instancesDb",
+        "string",
+      ),
+    ),
+    stateEventsDb: String(
+      coerceResolvedValue(
+        resolveValue(root.state?.eventsDb ?? DEFAULT_EVENTS_DB, root, "state.eventsDb"),
+        "state.eventsDb",
+        "string",
+      ),
+    ),
+  };
+}
+
+export async function loadStateConfig(configPath = CONFIG_PATH): Promise<StateConfig> {
+  return resolveStateConfig(await readConfigFile(configPath));
 }
